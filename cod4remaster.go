@@ -60,7 +60,7 @@ func listenMaster(port string) {
 					continue
 				}
 
-				cbuf := make([]byte, 20)
+				cbuf := make([]byte, 0)
 				innerCount := 0
 				per := 20
 
