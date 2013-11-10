@@ -9,16 +9,18 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-var (
-	db     map[string]int64
-	header string = "\xff\xff\xff\xff"
-)
+var db = struct {
+	sync.RWMutex
+	m map[string]int64
+}{m: make(map[string]int64)}
+
+var header string = "\xff\xff\xff\xff"
 
 func main() {
-	db = make(map[string]int64)
 	go listenMaster(":20810")
 	go listenAuth(":20800")
 	go purge(2)
@@ -49,20 +51,25 @@ func listenMaster(port string) {
 		endpoint := string(addr.IP.String()) + ":" + fmt.Sprint(addr.Port)
 
 		if strings.HasPrefix(msg[4:], "statusResponse") {
-			db[endpoint] = time.Now().Unix()
+			db.Lock()
+			db.m[endpoint] = time.Now().Unix()
+			db.Unlock()
 		} else {
 			switch msg[4:] {
 			case "getservers 6 full empty":
-				if len(db) == 0 {
+				db.RLock()
+				if len(db.m) == 0 {
 					// db is empty
+					db.RUnlock()
 					continue
 				}
 
 				cbuf := make([]byte, 0)
 				innerCount := 0
 				per := 20
-
-				for k, _ := range db {
+				
+				db.RLock()
+				for k, _ := range db.m {
 					if innerCount == 0 {
 						cbuf = append(cbuf, []byte(header+"getserversResponse\n\x00\\")...)
 					}
@@ -88,21 +95,26 @@ func listenMaster(port string) {
 						cbuf = make([]byte, 20)
 					}
 				}
+				db.RUnlock()
 				cbuf = append(cbuf, []byte("EOF")...)
 				conn.WriteToUDP(cbuf, addr)
 
 			case "heartbeat COD-4\n": //server checking in to MS
-				if _, ok := db[endpoint]; ok {
+				db.Lock()
+				if _, ok := db.m[endpoint]; ok {
 					// just checking in
-					db[endpoint] = time.Now().Unix()
+					db.m[endpoint] = time.Now().Unix()
 				} else {
 					// new server
 					nonce := generateNonce(9)
 					conn.WriteToUDP([]byte(fmt.Sprint(header, "getchallenge ", nonce, "\n")), addr)
 					conn.WriteToUDP([]byte(fmt.Sprint(header, "getstatus ", nonce, "\n")), addr)
 				}
+				db.Unlock()
 			case "heartbeat flatline":
-				delete(db, endpoint)
+				db.Lock()
+				delete(db.m, endpoint)
+				db.Unlock()
 			}
 		}
 	}
@@ -156,11 +168,13 @@ func listenAuth(port string) {
 func purge(interval int) {
 	for {
 		current := time.Now().Unix() - int64(interval*60)
-		for k, v := range db {
+		db.Lock()
+		for k, v := range db.m {
 			if v < current {
-				delete(db, k)
+				delete(db.m, k)
 			}
 		}
+		db.Unlock()
 		time.Sleep(time.Duration(interval) * time.Minute)
 	}
 }
