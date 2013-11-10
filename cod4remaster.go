@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/cznic/kv"
 	"log"
 	"math/rand"
 	"net"
@@ -14,12 +13,12 @@ import (
 )
 
 var (
-	db     *kv.DB
+	db     map[string]int64
 	header string = "\xff\xff\xff\xff"
 )
 
 func main() {
-	db, _ = kv.CreateMem(&kv.Options{})
+	db = make(map[string]int64)
 	go listenMaster(":20810")
 	go listenAuth(":20800")
 	go purge(2)
@@ -50,12 +49,11 @@ func listenMaster(port string) {
 		endpoint := string(addr.IP.String()) + ":" + fmt.Sprint(addr.Port)
 
 		if strings.HasPrefix(msg[4:], "statusResponse") {
-			db.Set([]byte(endpoint), []byte(fmt.Sprint(time.Now().Unix())))
+			db[endpoint] = time.Now().Unix()
 		} else {
 			switch msg[4:] {
 			case "getservers 6 full empty":
-				e, err := db.SeekFirst()
-				if err != nil {
+				if len(db) == 0 {
 					// db is empty
 					continue
 				}
@@ -64,25 +62,17 @@ func listenMaster(port string) {
 				innerCount := 0
 				per := 20
 
-				for {
-					k, _, err := e.Next()
-
-					if err != nil {
-						cbuf = append(cbuf, []byte("EOF")...)
-						conn.WriteToUDP(cbuf, addr)
-						break
-					}
-
+				for k, _ := range db {
 					if innerCount == 0 {
 						cbuf = append(cbuf, []byte(header+"getserversResponse\n\x00\\")...)
 					}
 
-					octets := strings.Split(strings.Split(string(k), ":")[0], ".")
+					octets := strings.Split(strings.Split(k, ":")[0], ".")
 					for i := 0; i < 4; i++ {
 						ioctet, _ := strconv.Atoi(octets[i])
 						cbuf = append(cbuf, byte(ioctet))
 					}
-					addrport, _ := strconv.Atoi(strings.Split(string(k), ":")[1])
+					addrport, _ := strconv.Atoi(strings.Split(k, ":")[1])
 					portbuf := &bytes.Buffer{}
 					binary.Write(portbuf, binary.BigEndian, uint16(addrport))
 					cbuf = append(cbuf, portbuf.Bytes()...)
@@ -98,20 +88,21 @@ func listenMaster(port string) {
 						cbuf = make([]byte, 20)
 					}
 				}
+				cbuf = append(cbuf, []byte("EOF")...)
+				conn.WriteToUDP(cbuf, addr)
 
 			case "heartbeat COD-4\n": //server checking in to MS
-				v, _ := db.Get(nil, []byte(endpoint)) //todo err
-				if v == nil {
+				if _, ok := db[endpoint]; ok {
+					// just checking in
+					db[endpoint] = time.Now().Unix()
+				} else {
 					// new server
 					nonce := generateNonce(9)
 					conn.WriteToUDP([]byte(fmt.Sprint(header, "getchallenge ", nonce, "\n")), addr)
 					conn.WriteToUDP([]byte(fmt.Sprint(header, "getstatus ", nonce, "\n")), addr)
-				} else {
-					// just checking in
-					db.Set([]byte(endpoint), []byte(fmt.Sprint(time.Now().Unix())))
 				}
 			case "heartbeat flatline":
-				db.Delete([]byte(endpoint))
+				delete(db, endpoint)
 			}
 		}
 	}
@@ -165,22 +156,9 @@ func listenAuth(port string) {
 func purge(interval int) {
 	for {
 		current := time.Now().Unix() - int64(interval*60)
-
-		e, err := db.SeekFirst()
-		for {
-			if err != nil {
-				break
-			}
-
-			k, v, err := e.Next()
-
-			if err != nil {
-				break
-			}
-
-			last, err := strconv.Atoi(string(v))
-			if err != nil || last < int(current) {
-				db.Delete(k)
+		for k, v := range db {
+			if v < current {
+				delete(db, k)
 			}
 		}
 		time.Sleep(time.Duration(interval) * time.Minute)
