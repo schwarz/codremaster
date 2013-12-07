@@ -7,6 +7,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
+  "net/http"
+  "regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -24,6 +26,8 @@ func main() {
 	go listenMaster(":20810")
 	go listenAuth(":20800")
 	go purge(2)
+  http.HandleFunc("/getinfo", getinfoHandler)
+  http.ListenAndServe(":8080", nil)
 	select {}
 }
 
@@ -64,40 +68,50 @@ func listenMaster(port string) {
 					continue
 				}
 
-				cbuf := make([]byte, 0)
+				res := make([]byte, 0)
 				innerCount := 0
 				per := 20
 				
 				db.RLock()
 				for k, _ := range db.m {
+          current := make([]byte, 0)
 					if innerCount == 0 {
-						cbuf = append(cbuf, []byte(header+"getserversResponse\n\x00\\")...)
+            current = append(current, []byte(fmt.Sprint(header, "getserversResponse", "\n\x00\\"))...)
 					}
 
-					octets := strings.Split(strings.Split(k, ":")[0], ".")
+          octets := strings.Split(k[:strings.Index(k, ":")], ".")
 					for i := 0; i < 4; i++ {
-						ioctet, _ := strconv.Atoi(octets[i])
-						cbuf = append(cbuf, byte(ioctet))
+						octet, err := strconv.Atoi(octets[i])
+            if err != nil {
+              continue
+            }
+            current = append(current, byte(octet))
 					}
-					addrport, _ := strconv.Atoi(strings.Split(k, ":")[1])
+
+					addrport, err := strconv.Atoi(k[strings.Index(k, ":"):])
+          if err != nil {
+            continue
+          }
 					portbuf := &bytes.Buffer{}
 					binary.Write(portbuf, binary.BigEndian, uint16(addrport))
-					cbuf = append(cbuf, portbuf.Bytes()...)
-					cbuf = append(cbuf, []byte("\\")...)
+          
+          current = append(current, portbuf.Bytes()...)
+          current = append(current, []byte("\\")...)
 
 					innerCount++
 					if innerCount == per {
-						cbuf = append(cbuf, []byte("EOT")...)
-						conn.WriteToUDP(cbuf, addr)
+            current = append(current, []byte("EOT")...)
+            res = append(res, current...)
+						conn.WriteToUDP(res, addr)
 
 						// reset
 						innerCount = 0
-						cbuf = make([]byte, 20)
+						res = make([]byte, 0)
 					}
 				}
 				db.RUnlock()
-				cbuf = append(cbuf, []byte("EOF")...)
-				conn.WriteToUDP(cbuf, addr)
+				res = append(res, []byte("EOF")...)
+				conn.WriteToUDP(res, addr)
 
 			case "heartbeat COD-4\n": //server checking in to MS
 				db.Lock()
@@ -162,12 +176,12 @@ func listenAuth(port string) {
 	}
 }
 
-// purge removes inactive game servers from the database
+// purge removes inactive game servers from the database.
 // A server is inactive if it has failed to send a hearbeat
 // within the timeframe specified by interval in minutes.
 func purge(interval int) {
 	for {
-		current := time.Now().Unix() - int64(interval*60)
+		current := time.Now().Unix() - int64(interval * 60)
 		db.Lock()
 		for k, v := range db.m {
 			if v < current {
@@ -177,4 +191,54 @@ func purge(interval int) {
 		db.Unlock()
 		time.Sleep(time.Duration(interval) * time.Minute)
 	}
+}
+
+// getInfo queries the specified server.
+func getInfo(addr string) (map[string]string, error) {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := net.DialUDP("udp", nil, udpAddr)
+	if err != nil {
+		return nil, err
+	}
+
+	defer conn.Close()
+
+	conn.Write([]byte("\xff\xff\xff\xffgetinfo xxx"))
+
+	var buf [512]byte
+	conn.SetReadDeadline(time.Now().Add(10000 * time.Millisecond))
+	n, err := conn.Read(buf[0:])
+	if err != nil {
+		return nil, err
+	}
+
+	response := string(buf[0:n])
+	fields := strings.Split(response[strings.Index(response, "\\")+1:], "\\")
+	ir := make(map[string]string)
+	for i := 0; i < len(fields)-1; i = i + 2 {
+		ir[fields[i]] = fields[i+1]
+	}
+
+	return ir, nil
+}
+
+// removeColorCodes returns a copy of string s without Quake color codes.
+func removeColorCodes(s string) string {
+	re := regexp.MustCompile("\\^[0-7]")
+	return re.ReplaceAllString(s, "")
+}
+
+func getinfoHandler(w http.ResponseWriter, r *http.Request) {
+  response, err := getInfo(r.FormValue("addr"))
+  
+  if err != nil {
+    fmt.Fprint(w, err)
+    return
+  }
+
+  fmt.Fprint(w, response)
 }
