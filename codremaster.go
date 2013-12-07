@@ -7,8 +7,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
-  "net/http"
-  "regexp"
+	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,8 +26,8 @@ func main() {
 	go listenMaster(":20810")
 	go listenAuth(":20800")
 	go purge(2)
-  http.HandleFunc("/getinfo", getinfoHandler)
-  http.ListenAndServe(":8080", nil)
+	http.HandleFunc("/getinfo", getinfoHandler)
+	http.ListenAndServe(":8080", nil)
 	select {}
 }
 
@@ -71,37 +71,37 @@ func listenMaster(port string) {
 				res := make([]byte, 0)
 				innerCount := 0
 				per := 20
-				
+
 				db.RLock()
 				for k, _ := range db.m {
-          current := make([]byte, 0)
+					current := make([]byte, 0)
 					if innerCount == 0 {
-            current = append(current, []byte(fmt.Sprint(header, "getserversResponse", "\n\x00\\"))...)
+						current = append(current, []byte(fmt.Sprint(header, "getserversResponse", "\n\x00\\"))...)
 					}
 
-          octets := strings.Split(k[:strings.Index(k, ":")], ".")
+					octets := strings.Split(k[:strings.Index(k, ":")], ".")
 					for i := 0; i < 4; i++ {
 						octet, err := strconv.Atoi(octets[i])
-            if err != nil {
-              continue
-            }
-            current = append(current, byte(octet))
+						if err != nil {
+							continue
+						}
+						current = append(current, byte(octet))
 					}
 
 					addrport, err := strconv.Atoi(k[strings.Index(k, ":"):])
-          if err != nil {
-            continue
-          }
+					if err != nil {
+						continue
+					}
 					portbuf := &bytes.Buffer{}
 					binary.Write(portbuf, binary.BigEndian, uint16(addrport))
-          
-          current = append(current, portbuf.Bytes()...)
-          current = append(current, []byte("\\")...)
+
+					current = append(current, portbuf.Bytes()...)
+					current = append(current, []byte("\\")...)
 
 					innerCount++
 					if innerCount == per {
-            current = append(current, []byte("EOT")...)
-            res = append(res, current...)
+						current = append(current, []byte("EOT")...)
+						res = append(res, current...)
 						conn.WriteToUDP(res, addr)
 
 						// reset
@@ -181,7 +181,7 @@ func listenAuth(port string) {
 // within the timeframe specified by interval in minutes.
 func purge(interval int) {
 	for {
-		current := time.Now().Unix() - int64(interval * 60)
+		current := time.Now().Unix() - int64(interval*60)
 		db.Lock()
 		for k, v := range db.m {
 			if v < current {
@@ -233,12 +233,12 @@ func removeColorCodes(s string) string {
 }
 
 func getinfoHandler(w http.ResponseWriter, r *http.Request) {
-  response, err := getInfo(r.FormValue("addr"))
-  
-  if err != nil {
-    fmt.Fprint(w, err)
-    return
-  }
+	response, err := getInfo(r.FormValue("addr"))
 
-  fmt.Fprint(w, response)
+	if err != nil {
+		fmt.Fprint(w, err)
+		return
+	}
+
+	fmt.Fprint(w, response)
 }
