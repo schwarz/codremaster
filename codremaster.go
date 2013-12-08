@@ -72,7 +72,6 @@ func listenMaster(port string) {
 				innerCount := 0
 				per := 20
 
-				db.RLock()
 				for k, _ := range db.m {
 					current := make([]byte, 0)
 					if innerCount == 0 {
