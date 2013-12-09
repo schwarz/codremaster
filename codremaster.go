@@ -25,7 +25,7 @@ var header string = "\xff\xff\xff\xff"
 func main() {
 	go listenMaster(":20810")
 	go listenAuth(":20800")
-	go purge(2)
+	go purge(6)
 	http.HandleFunc("/getinfo", getinfoHandler)
 	http.ListenAndServe(":8080", nil)
 	select {}
@@ -87,7 +87,7 @@ func listenMaster(port string) {
 						current = append(current, byte(octet))
 					}
 
-					addrport, err := strconv.Atoi(k[strings.Index(k, ":"):])
+					addrport, err := strconv.Atoi(k[strings.Index(k, ":")+1:])
 					if err != nil {
 						continue
 					}
@@ -97,10 +97,11 @@ func listenMaster(port string) {
 					current = append(current, portbuf.Bytes()...)
 					current = append(current, []byte("\\")...)
 
+					res = append(res, current...)
+
 					innerCount++
 					if innerCount == per {
-						current = append(current, []byte("EOT")...)
-						res = append(res, current...)
+						res = append(res, []byte("EOT")...)
 						conn.WriteToUDP(res, addr)
 
 						// reset
