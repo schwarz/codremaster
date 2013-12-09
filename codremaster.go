@@ -54,82 +54,79 @@ func listenMaster(port string) {
 		msg := string(buf[0:n])
 		endpoint := string(addr.IP.String()) + ":" + fmt.Sprint(addr.Port)
 
-		if strings.HasPrefix(msg[4:], "statusResponse") {
+		switch {
+		case strings.HasPrefix(msg[4:], "statusResponse"):
 			db.Lock()
 			db.m[endpoint] = time.Now().Unix()
 			db.Unlock()
-		} else {
-			switch msg[4:] {
-			case "getservers 6 full empty":
-				db.RLock()
-				if len(db.m) == 0 {
-					// db is empty
-					db.RUnlock()
-					continue
+		case strings.HasPrefix(msg[4:], "getservers "):
+			db.RLock()
+			if len(db.m) == 0 {
+				// db is empty
+				db.RUnlock()
+				continue
+			}
+
+			res := make([]byte, 0)
+			innerCount := 0
+			per := 20
+
+			for k, _ := range db.m {
+				current := make([]byte, 0)
+				if innerCount == 0 {
+					current = append(current, []byte(fmt.Sprint(header, "getserversResponse", "\n\x00\\"))...)
 				}
 
-				res := make([]byte, 0)
-				innerCount := 0
-				per := 20
-
-				for k, _ := range db.m {
-					current := make([]byte, 0)
-					if innerCount == 0 {
-						current = append(current, []byte(fmt.Sprint(header, "getserversResponse", "\n\x00\\"))...)
-					}
-
-					octets := strings.Split(k[:strings.Index(k, ":")], ".")
-					for i := 0; i < 4; i++ {
-						octet, err := strconv.Atoi(octets[i])
-						if err != nil {
-							continue
-						}
-						current = append(current, byte(octet))
-					}
-
-					addrport, err := strconv.Atoi(k[strings.Index(k, ":")+1:])
+				octets := strings.Split(k[:strings.Index(k, ":")], ".")
+				for i := 0; i < 4; i++ {
+					octet, err := strconv.Atoi(octets[i])
 					if err != nil {
 						continue
 					}
-					portbuf := &bytes.Buffer{}
-					binary.Write(portbuf, binary.BigEndian, uint16(addrport))
-
-					current = append(current, portbuf.Bytes()...)
-					current = append(current, []byte("\\")...)
-
-					res = append(res, current...)
-
-					innerCount++
-					if innerCount == per {
-						res = append(res, []byte("EOT")...)
-						conn.WriteToUDP(res, addr)
-
-						// reset
-						innerCount = 0
-						res = make([]byte, 0)
-					}
+					current = append(current, byte(octet))
 				}
-				db.RUnlock()
-				res = append(res, []byte("EOF")...)
-				conn.WriteToUDP(res, addr)
 
-			case "heartbeat COD-4\n": //server checking in to MS
-				db.Lock()
-				if _, ok := db.m[endpoint]; ok {
-					// just checking in
-					db.m[endpoint] = time.Now().Unix()
-				} else {
-					// new server
-					nonce := generateNonce(9)
-					conn.WriteToUDP([]byte(fmt.Sprint(header, "getchallenge ", nonce, "\n")), addr)
-					conn.WriteToUDP([]byte(fmt.Sprint(header, "getstatus ", nonce, "\n")), addr)
+				addrport, err := strconv.Atoi(k[strings.Index(k, ":")+1:])
+				if err != nil {
+					continue
 				}
-				db.Unlock()
-			case "heartbeat flatline":
-				db.Lock()
-				delete(db.m, endpoint)
-				db.Unlock()
+				portbuf := &bytes.Buffer{}
+				binary.Write(portbuf, binary.BigEndian, uint16(addrport))
+
+				current = append(current, portbuf.Bytes()...)
+				current = append(current, []byte("\\")...)
+
+				res = append(res, current...)
+
+				innerCount++
+				if innerCount == per {
+					res = append(res, []byte("EOT")...)
+					conn.WriteToUDP(res, addr)
+
+					// reset
+					innerCount = 0
+					res = make([]byte, 0)
+				}
 			}
+			db.RUnlock()
+			res = append(res, []byte("EOF")...)
+			conn.WriteToUDP(res, addr)
+		case msg[4:] == "heartbeat flatline":
+			db.Lock()
+			delete(db.m, endpoint)
+			db.Unlock()
+		case strings.HasPrefix(msg[4:], "heartbeat"): //server checking in to MS
+			db.Lock()
+			if _, ok := db.m[endpoint]; ok {
+				// just checking in
+				db.m[endpoint] = time.Now().Unix()
+			} else {
+				// new server
+				nonce := generateNonce(9)
+				conn.WriteToUDP([]byte(fmt.Sprint(header, "getchallenge ", nonce, "\n")), addr)
+				conn.WriteToUDP([]byte(fmt.Sprint(header, "getstatus ", nonce, "\n")), addr)
+			}
+			db.Unlock()
 		}
 	}
 }
