@@ -22,17 +22,25 @@ var db = struct {
 
 var header string = "\xff\xff\xff\xff"
 
+const (
+	codmaster  = 20510
+	codauth    = 20500
+	cod2master = 20710
+	cod2auth   = 20700
+	cod4master = 20810
+	cod4auth   = 20800
+)
+
 func main() {
-	go listenMaster(":20810")
-	go listenAuth(":20800")
+	go listenMaster(cod4master)
+	go listenAuth(cod4auth)
 	go purge(6)
 	http.HandleFunc("/getinfo", getinfoHandler)
 	http.ListenAndServe(":8080", nil)
-	select {}
 }
 
-func listenMaster(port string) {
-	udpAddr, err := net.ResolveUDPAddr("udp", port)
+func listenMaster(port int) {
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprint(":", port))
 	if err != nil {
 		log.Fatal("Could not resolve port for master.")
 	}
@@ -44,7 +52,7 @@ func listenMaster(port string) {
 
 	defer conn.Close()
 
-	fmt.Println("Master server is listening...")
+  fmt.Printf("Master server is listening on port %d...\n", port)
 	for {
 		var buf [1024]byte
 		n, addr, err := conn.ReadFromUDP(buf[0:])
@@ -144,8 +152,8 @@ func generateNonce(digits int) string {
 
 // listenAuth mimics the authentication server
 // Packets are received but not acted upon.
-func listenAuth(port string) {
-	udpAddr, err := net.ResolveUDPAddr("udp", port)
+func listenAuth(port int) {
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprint(":", port))
 	if err != nil {
 		log.Fatal("Could not resolve port for auth.")
 	}
@@ -157,7 +165,7 @@ func listenAuth(port string) {
 
 	defer conn.Close()
 
-	fmt.Println("Authentication server is listening...")
+	fmt.Printf("Authentication server is listening on port %d...\n", port)
 	for {
 		var buf [1024]byte
 		n, _, err := conn.ReadFromUDP(buf[0:])
